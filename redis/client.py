@@ -436,7 +436,8 @@ class StrictRedis(object):
                     continue
 
     def lock(self, name, timeout=None, sleep=0.1,
-             token_generator=generate_random_token):
+             token_generator=generate_random_token,
+             prefix_generator=None):
         """
         Return a new Lock object using key ``name`` that mimics
         the behavior of threading.Lock.
@@ -450,6 +451,13 @@ class StrictRedis(object):
 
         ``token_generator`` is a function that takes no parameters and
         returns a string to store in Redis as the key's value.
+
+        ``prefix_generator`` is a function that takes no parameters and returns
+        a string to prepend onto the token stored in Redis.  This function is
+        only necessary when sharing a LuaLock object instance between multiple
+        contexts in a single process (threads or greenlets).  If each context
+        has its own LuaLock instance, prefix_generator can be None (its default
+        value.
         """
         if self.use_lua_lock is None:
             try:
@@ -459,7 +467,8 @@ class StrictRedis(object):
                 self.use_lua_lock = False
         if self.use_lua_lock:
             return LuaLock(self, name, timeout=timeout, sleep=sleep,
-                           token_generator=token_generator)
+                           token_generator=token_generator,
+                           prefix_generator=prefix_generator)
         else:
             return Lock(self, name, timeout=timeout, sleep=sleep)
 
@@ -2373,7 +2382,8 @@ class LuaLock(object):
     LUA_LOCK_RELEASE = None
 
     def __init__(self, redis, name, timeout=None, sleep=0.1,
-                 token_generator=generate_random_token):
+                 token_generator=generate_random_token,
+                 prefix_generator=None):
         """
         Create a new Lock instance named ``name`` using the Redis client
         supplied by ``redis``.
@@ -2387,11 +2397,19 @@ class LuaLock(object):
 
         ``token_generator`` is a function that takes no parameters and
         returns a string to store in Redis as the key's value.
+
+        ``prefix_generator`` is a function that takes no parameters and returns
+        a string to prepend onto the token stored in Redis.  This function is
+        only necessary when sharing a LuaLock object instance between multiple
+        contexts in a single process (threads or greenlets).  If each context
+        has its own LuaLock instance, prefix_generator can be None (its default
+        value.
         """
         self.redis = redis
         self.name = name
         self.token = None
         self.token_generator = token_generator
+        self.prefix_generator = prefix_generator
         self.timeout = timeout
         self.sleep = sleep
         if self.timeout and self.sleep > self.timeout:
@@ -2422,12 +2440,16 @@ class LuaLock(object):
         """
         sleep = self.sleep
         timeout = self.timeout if self.timeout else Lock.LOCK_FOREVER
-        token = self.token_generator()
+        token_with_prefix = token = self.token_generator()
+        if self.prefix_generator is not None:
+            token_with_prefix = self.prefix_generator() + token
         while 1:
             timeout_at = mod_time.time() + self.timeout if self.timeout \
                 else Lock.LOCK_FOREVER
             if LuaLock.LUA_LOCK_ACQUIRE(keys=(self.name,),
-                                        args=(int(timeout), token)):
+                                        args=(int(timeout),
+                                              token_with_prefix)):
+                # store token without the prefix
                 self.token = token
                 return True
             if not blocking:
@@ -2438,6 +2460,12 @@ class LuaLock(object):
         """
         Releases the already acquired lock
         """
-        if LuaLock.LUA_LOCK_RELEASE(keys=(self.name,),
-                                    args=(self.token,)) == -1:
+        token_with_prefix = self.token
+        if self.prefix_generator is not None:
+            token_with_prefix = self.prefix_generator() + token_with_prefix
+        result = LuaLock.LUA_LOCK_RELEASE(keys=(self.name,),
+                                          args=(token_with_prefix,))
+        if result == -1:
             raise ValueError("Cannot release an unlocked lock")
+        elif results == 0:
+            raise RuntimeError("Cannot release another context's lock")
