@@ -19,7 +19,7 @@ from redis.exceptions import (
 )
 
 
-__version__ = '2.9.1.3'
+__version__ = '2.9.1.4'
 VERSION = tuple(map(int, __version__.split('.')))
 
 __all__ = [
