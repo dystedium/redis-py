@@ -8,7 +8,8 @@ from binascii import b2a_hex
 from os import urandom
 from redis._compat import (b, basestring, bytes, imap, iteritems, iterkeys,
                            itervalues, izip, long, nativestr, unicode)
-from redis.connection import ConnectionPool, parse_url, UnixDomainSocketConnection
+from redis.connection import (ConnectionPool, parse_url,
+                              UnixDomainSocketConnection)
 from redis.exceptions import (
     ConnectionError,
     DataError,
